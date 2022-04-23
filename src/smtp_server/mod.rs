@@ -16,9 +16,9 @@ pub(crate) struct SmtpServer {
 }
 
 impl SmtpServer {
-    pub(crate) fn new() -> Result<Self, Error> {
+    pub(crate) fn new<A: ToSocketAddrs>(local_addr: A) -> Result<Self, Error> {
         Ok(SmtpServer {
-            tcp_listener: TcpListener::bind("127.0.0.1:25")?,
+            tcp_listener: TcpListener::bind(local_addr)?,
             session_builder: SessionBuilder::new("TCP mail saver"),
         })
     }

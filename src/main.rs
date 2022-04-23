@@ -6,7 +6,7 @@ mod email;
 mod smtp_server;
 
 fn main() {
-    let smpt_server = SmtpServer::new().expect("Could not bind to TcpSocket.");
+    let smpt_server = SmtpServer::new("127.0.0.1:25").expect("Could not bind to TcpSocket.");
 
     loop {
         smpt_server.recv_mail().expect("Could not receive mail.");

@@ -35,3 +35,45 @@ impl SmtpEmail {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lettre::{self, SendableEmail};
+    use lettre_email;
+
+    impl From<SendableEmail> for SmtpEmail {
+        /// Converts a `lettre::SendableEmail` to a `SmtpEmail`.
+        /// This may panic, if the `message` of `m` is a `Reader`, that returns an `io::Error`.
+        fn from(m: SendableEmail) -> Self {
+            let from = m.envelope().from().cloned();
+            let to = m.envelope().to().to_vec();
+            let message_id = format!("{}.lettre@localhost", m.message_id());
+            let mut data = match m.message() {
+                lettre::Message::Bytes(curs) => curs.into_inner(),
+                lettre::Message::Reader(mut r) => {
+                    let mut buf = vec![];
+                    r.read_to_end(&mut buf)
+                        .expect("Called SmtpEmail::from() with a Reader, that returned an Error.");
+                    buf
+                }
+            };
+            // We add another CRLF at the end, to allow for a comparison with received mails:
+            data.push(0x0d);
+            data.push(0x0a);
+
+            Self {
+                from,
+                to,
+                message_id,
+                data,
+            }
+        }
+    }
+
+    impl From<lettre_email::Email> for SmtpEmail {
+        fn from(m: lettre_email::Email) -> Self {
+            Self::from(Into::<lettre::SendableEmail>::into(m))
+        }
+    }
+}
