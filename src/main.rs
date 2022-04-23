@@ -2,6 +2,7 @@ use std::io;
 
 use smtp_server::SmtpServer;
 
+mod email;
 mod smtp_server;
 
 fn main() {
@@ -15,6 +16,7 @@ fn main() {
 #[derive(Debug)]
 pub(crate) enum Error {
     SysIo(io::Error),
+    Parsing(&'static str),
 }
 
 impl From<io::Error> for Error {
