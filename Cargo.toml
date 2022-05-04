@@ -5,6 +5,7 @@ edition = "2021"
 
 
 [dependencies]
+configparser = "3.0"
 lettre = "0.9"
 mailin = "0.6.0"
 mail-parser = "0.4.5"
