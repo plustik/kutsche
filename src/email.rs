@@ -5,10 +5,10 @@ use crate::Error;
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct SmtpEmail {
-    from: Option<EmailAddress>,
-    to: Vec<EmailAddress>,
-    message_id: String,
-    data: Vec<u8>,
+    pub(crate) from: Option<EmailAddress>,
+    pub(crate) to: Vec<EmailAddress>,
+    pub(crate) message_id: String,
+    pub(crate) data: Vec<u8>,
 }
 
 impl SmtpEmail {
