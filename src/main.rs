@@ -1,6 +1,5 @@
 use std::{env::args, io};
 
-use maildest::{EmailDestination, FileDestination};
 use smtp_server::SmtpServer;
 
 mod config;
@@ -11,16 +10,16 @@ mod smtp_server;
 fn main() {
     let config = config::Config::with_args(args()).expect("Could not parse configuration.");
 
-    const DEST_DIR: &str = "./received_mail";
-    let file_dest =
-        FileDestination::new(DEST_DIR).expect("The given destination directory does not exist.");
-
-    let smpt_server = SmtpServer::new(config.local_addr).expect("Could not bind to TcpSocket.");
+    let smtp_server = SmtpServer::new(config.local_addr).expect("Could not bind to TcpSocket.");
 
     loop {
-        file_dest
-            .write_email(smpt_server.recv_mail().expect("Could not receive mail."))
-            .expect("Could not write email to file.");
+        let email = smtp_server.recv_mail().expect("Could not receive email.");
+        for addr in email.to {
+            if let Some(dest) = config.dest_map.get(AsRef::<str>::as_ref(&addr)) {
+                dest.write_email(&email.content)
+                    .expect("Could not forward email.");
+            }
+        }
     }
 }
 

@@ -4,11 +4,16 @@ use mail_parser::Message;
 use crate::Error;
 
 #[derive(Debug, PartialEq)]
+pub(crate) struct Email {
+    pub(crate) message_id: String,
+    pub(crate) data: Vec<u8>,
+}
+
+#[derive(Debug, PartialEq)]
 pub(crate) struct SmtpEmail {
     pub(crate) from: Option<EmailAddress>,
     pub(crate) to: Vec<EmailAddress>,
-    pub(crate) message_id: String,
-    pub(crate) data: Vec<u8>,
+    pub(crate) content: Email,
 }
 
 impl SmtpEmail {
@@ -30,8 +35,7 @@ impl SmtpEmail {
         Ok(SmtpEmail {
             from,
             to,
-            message_id,
-            data,
+            content: Email { message_id, data },
         })
     }
 }
@@ -65,8 +69,7 @@ mod tests {
             Self {
                 from,
                 to,
-                message_id,
-                data,
+                content: Email { message_id, data },
             }
         }
     }
