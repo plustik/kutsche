@@ -30,6 +30,7 @@ pub(crate) enum Error {
     NotADir,
     Parsing(&'static str),
     SysIo(io::Error),
+    Tls(rustls::Error),
 }
 
 impl From<io::Error> for Error {
@@ -40,5 +41,10 @@ impl From<io::Error> for Error {
 impl From<String> for Error {
     fn from(inner: String) -> Self {
         Self::General(inner)
+    }
+}
+impl From<rustls::Error> for Error {
+    fn from(inner: rustls::Error) -> Self {
+        Self::Tls(inner)
     }
 }
