@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::env::Args;
 use std::fs::File;
 use std::io::BufReader;
 use std::net::{SocketAddr, ToSocketAddrs};
@@ -21,7 +20,7 @@ pub(crate) struct Config {
 }
 
 impl Config {
-    pub(crate) fn with_args(mut args: Args) -> Result<Self, Error> {
+    pub(crate) fn with_args(mut args: impl Iterator<Item = String>) -> Result<Self, Error> {
         // Select path of config file from arguments or default:
         let config_path = if let Some(arg) = args.next() {
             if arg != "-c" && arg != "--config-file" {

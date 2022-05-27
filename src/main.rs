@@ -8,7 +8,10 @@ mod maildest;
 mod smtp_server;
 
 fn main() {
-    let config = config::Config::with_args(args()).expect("Could not parse configuration.");
+    let config = config::Config::with_args(
+        args().skip_while(|s| s.ends_with("kutsche") && !s.starts_with('-')),
+    )
+    .expect("Could not parse configuration.");
 
     let smtp_server = SmtpServer::new(&config).expect("Could not bind to TcpSocket.");
 
