@@ -10,7 +10,7 @@ mod smtp_server;
 fn main() {
     let config = config::Config::with_args(args()).expect("Could not parse configuration.");
 
-    let smtp_server = SmtpServer::new(config.local_addr).expect("Could not bind to TcpSocket.");
+    let smtp_server = SmtpServer::new(&config).expect("Could not bind to TcpSocket.");
 
     loop {
         let email = smtp_server.recv_mail().expect("Could not receive email.");
