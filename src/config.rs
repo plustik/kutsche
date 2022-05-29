@@ -8,12 +8,15 @@ use std::sync::Arc;
 use configparser::ini::Ini;
 use rustls::{server::ServerConfig, Certificate, PrivateKey};
 use rustls_pemfile::{read_all, read_one, Item};
+use users::{get_group_by_name, get_user_by_name, Group, User};
 
 use crate::maildest::{EmailDestination, FileDestination};
 use crate::Error;
 
 pub(crate) struct Config {
-    pub(crate) local_addr: SocketAddr,
+    pub(crate) effective_user: Option<User>,
+    pub(crate) effective_group: Option<Group>,
+    pub(crate) local_addr: SocketAddr, // TODO: multiple addresses
     default_path: Option<PathBuf>,
     pub(crate) dest_map: HashMap<String, Box<dyn EmailDestination>>,
     pub(crate) tls_config: Option<Arc<ServerConfig>>,
@@ -54,6 +57,18 @@ impl Config {
             .ok_or_else(|| {
                 Error::Config("Could not resolve value of 'bind_address'.".to_string())
             })?;
+
+        // Get new unix user and group:
+		let effective_user = if let Some(name) = main_section.remove("unix_user").flatten() {
+    		Some(get_user_by_name(&name).ok_or_else(|| Error::Config("The user given by 'unix_user' does not exist.".to_string()))?)
+		} else {
+    		None
+        };
+		let effective_group = if let Some(name) = main_section.remove("unix_group").flatten() {
+    		Some(get_group_by_name(&name).ok_or_else(|| Error::Config("The group given by 'unix_group' does not exist.".to_string()))?)
+		} else {
+    		None
+        };
 
         // Get TLS configuration:
         let tls_config = if local_addr.port() == 465 {
@@ -111,6 +126,8 @@ impl Config {
             .map(PathBuf::from);
 
         Config {
+            effective_user,
+            effective_group,
             local_addr,
             default_path,
             dest_map: HashMap::new(),

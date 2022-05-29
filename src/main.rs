@@ -1,5 +1,7 @@
 use std::{env::args, io};
 
+use users::switch::{set_effective_gid, set_effective_uid};
+
 use smtp_server::SmtpServer;
 
 mod config;
@@ -14,6 +16,14 @@ fn main() {
     .expect("Could not parse configuration.");
 
     let smtp_server = SmtpServer::new(&config).expect("Could not bind to TcpSocket.");
+
+    // Dropping privileges:
+    if let Some(user) = config.effective_user {
+        set_effective_uid(user.uid()).expect("Could not change effective user.");
+    }
+    if let Some(group) = config.effective_group {
+        set_effective_gid(group.gid()).expect("Could not change effective group.");
+    }
 
     loop {
         let email = smtp_server.recv_mail().expect("Could not receive email.");
