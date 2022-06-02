@@ -2,9 +2,10 @@ use lettre::EmailAddress;
 use log::info;
 use mailin::{response, Handler, Response, SessionBuilder};
 use rustls::{ServerConfig, ServerConnection};
+use tokio::net::TcpListener;
 
 use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
-use std::net::{IpAddr, TcpListener};
+use std::net::IpAddr;
 use std::sync::{
     mpsc::{channel, Sender},
     Arc,
@@ -22,25 +23,29 @@ pub(crate) struct SmtpServer {
 }
 
 impl SmtpServer {
-    pub(crate) fn new(conf: &Config) -> Result<Self, Error> {
+    pub(crate) async fn new(conf: &Config) -> Result<Self, Error> {
         Ok(SmtpServer {
-            tcp_listener: TcpListener::bind(conf.local_addr)?,
+            tcp_listener: TcpListener::bind(conf.local_addr).await?,
             session_builder: SessionBuilder::new("TCP mail saver"),
             tls_config: conf.tls_config.clone(),
         })
     }
 
-    pub(crate) fn recv_mail(&self) -> Result<SmtpEmail, Error> {
+    pub(crate) async fn recv_mail(&self) -> Result<SmtpEmail, Error> {
         if self.tls_config.is_some() {
-            self.recv_mail_tls()
+            self.recv_mail_tls().await
         } else {
-            self.recv_mail_plain()
+            self.recv_mail_plain().await
         }
     }
 
-    fn recv_mail_plain(&self) -> Result<SmtpEmail, Error> {
-        let (stream, peer_addr) = self.tcp_listener.accept()?;
+    async fn recv_mail_plain(&self) -> Result<SmtpEmail, Error> {
+        let (stream, peer_addr) = self.tcp_listener.accept().await?;
         info!("Accepted incoming TCP connection.");
+
+        // TODO: Make the complete function use async IO
+        let stream = stream.into_std()?;
+        stream.set_nonblocking(false)?;
 
         let mut conn_buf_read = BufReader::new(&stream);
         let mut conn_buf_write = BufWriter::new(&stream);
@@ -66,9 +71,14 @@ impl SmtpServer {
         Ok(receiver.recv().expect("Receive email channel hung up."))
     }
 
-    fn recv_mail_tls(&self) -> Result<SmtpEmail, Error> {
-        let (mut tcp_stream, peer_addr) = self.tcp_listener.accept()?;
+    async fn recv_mail_tls(&self) -> Result<SmtpEmail, Error> {
+        let (tcp_stream, peer_addr) = self.tcp_listener.accept().await?;
         info!("Accepted incoming TCP connection.");
+
+        // TODO: Make the complete function use async IO
+        let mut tcp_stream = tcp_stream.into_std()?;
+        tcp_stream.set_nonblocking(false)?;
+
         let mut tls_conn = ServerConnection::new(
             self.tls_config
                 .as_ref()

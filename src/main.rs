@@ -14,7 +14,8 @@ mod email;
 mod maildest;
 mod smtp_server;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let config = config::Config::with_args(
         args().skip_while(|s| s.ends_with("kutsche") && !s.starts_with('-')),
     )
@@ -22,7 +23,9 @@ fn main() {
 
     init_logger(&config).expect("Could not initialize logger.");
 
-    let smtp_server = SmtpServer::new(&config).expect("Could not bind to TcpSocket.");
+    let smtp_server = SmtpServer::new(&config)
+        .await
+        .expect("Could not bind to TcpSocket.");
 
     // Dropping privileges:
     if let Some(user) = config.effective_user {
@@ -37,7 +40,10 @@ fn main() {
 
     info!("Accepting connections...");
     loop {
-        let email = smtp_server.recv_mail().expect("Could not receive email.");
+        let email = smtp_server
+            .recv_mail()
+            .await
+            .expect("Could not receive email.");
         for addr in email.to {
             if let Some(dest) = config.dest_map.get(AsRef::<str>::as_ref(&addr)) {
                 dest.write_email(&email.content)
