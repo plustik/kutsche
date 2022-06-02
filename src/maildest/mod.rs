@@ -2,6 +2,8 @@ use std::fs::OpenOptions;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
+use log::info;
+
 use crate::email::Email;
 use crate::Error;
 
@@ -45,6 +47,8 @@ impl EmailDestination for FileDestination {
         writer.write_all(&email.data)?;
 
         writer.flush()?;
+
+        info!("Wrote email with id {} to filesystem.", &email.message_id);
 
         Ok(())
     }

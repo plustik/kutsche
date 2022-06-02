@@ -1,4 +1,5 @@
 use lettre::EmailAddress;
+use log::info;
 use mailin::{response, Handler, Response, SessionBuilder};
 use rustls::{ServerConfig, ServerConnection};
 
@@ -39,6 +40,8 @@ impl SmtpServer {
 
     fn recv_mail_plain(&self) -> Result<SmtpEmail, Error> {
         let (stream, peer_addr) = self.tcp_listener.accept()?;
+        info!("Accepted incoming TCP connection.");
+
         let mut conn_buf_read = BufReader::new(&stream);
         let mut conn_buf_write = BufWriter::new(&stream);
 
@@ -65,6 +68,7 @@ impl SmtpServer {
 
     fn recv_mail_tls(&self) -> Result<SmtpEmail, Error> {
         let (mut tcp_stream, peer_addr) = self.tcp_listener.accept()?;
+        info!("Accepted incoming TCP connection.");
         let mut tls_conn = ServerConnection::new(
             self.tls_config
                 .as_ref()
@@ -198,6 +202,7 @@ impl Handler for MailHandler {
                 .expect("Received DATA_END before DATA_START."),
         )
         .expect("Could not parse received message.");
+        info!("Received an email over SMTP.");
         self.result_sender
             .send(complete_mail)
             .expect("Could not send received mail through channel.");

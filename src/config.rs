@@ -59,15 +59,19 @@ impl Config {
             })?;
 
         // Get new unix user and group:
-		let effective_user = if let Some(name) = main_section.remove("unix_user").flatten() {
-    		Some(get_user_by_name(&name).ok_or_else(|| Error::Config("The user given by 'unix_user' does not exist.".to_string()))?)
-		} else {
-    		None
+        let effective_user = if let Some(name) = main_section.remove("unix_user").flatten() {
+            Some(get_user_by_name(&name).ok_or_else(|| {
+                Error::Config("The user given by 'unix_user' does not exist.".to_string())
+            })?)
+        } else {
+            None
         };
-		let effective_group = if let Some(name) = main_section.remove("unix_group").flatten() {
-    		Some(get_group_by_name(&name).ok_or_else(|| Error::Config("The group given by 'unix_group' does not exist.".to_string()))?)
-		} else {
-    		None
+        let effective_group = if let Some(name) = main_section.remove("unix_group").flatten() {
+            Some(get_group_by_name(&name).ok_or_else(|| {
+                Error::Config("The group given by 'unix_group' does not exist.".to_string())
+            })?)
+        } else {
+            None
         };
 
         // Get TLS configuration:
