@@ -5,8 +5,8 @@ use lettre::{
 use lettre_email::EmailBuilder;
 use tokio::runtime::Runtime;
 
-use std::{thread, net::ToSocketAddrs};
 use std::time::Duration;
+use std::{net::ToSocketAddrs, thread};
 
 use super::*;
 use crate::{config::Config, email::SmtpEmail};
@@ -64,13 +64,22 @@ fn receive_mails(n: usize) -> thread::JoinHandle<Vec<SmtpEmail>> {
 
         let mut res = vec![];
         let mut server_config = Config::default();
-        server_config.local_addr = ("localhost", SMPT_TEST_PORT).to_socket_addrs().unwrap().next().unwrap();
+        server_config.local_addr = ("localhost", SMPT_TEST_PORT)
+            .to_socket_addrs()
+            .unwrap()
+            .next()
+            .unwrap();
         println!("Binding to address: {}", &server_config.local_addr);
-        let smtp_server =
-            runtime.block_on(SmtpServer::new(&server_config)).expect("Could not start SMTP server.");
+        let smtp_server = runtime
+            .block_on(SmtpServer::new(&server_config))
+            .expect("Could not start SMTP server.");
         println!("Started SMTP server.");
         for i in 0..n {
-            res.push(runtime.block_on(smtp_server.recv_mail()).expect("Could not receive email."));
+            res.push(
+                runtime
+                    .block_on(smtp_server.recv_mail())
+                    .expect("Could not receive email."),
+            );
             println!("Received mail {}", i);
         }
 

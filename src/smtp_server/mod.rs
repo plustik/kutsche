@@ -1,15 +1,14 @@
 use lettre::EmailAddress;
 use log::info;
 use mailin::{response, Handler, Response, SessionBuilder};
-use rustls::{ServerConfig, ServerConnection};
-use tokio::net::TcpListener;
-
-use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
-use std::net::IpAddr;
-use std::sync::{
-    mpsc::{channel, Sender},
-    Arc,
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufStream},
+    net::TcpListener,
 };
+use tokio_rustls::TlsAcceptor;
+
+use std::net::IpAddr;
+use std::sync::mpsc::{channel, Sender};
 
 use crate::{config::Config, email::SmtpEmail, Error};
 
@@ -19,7 +18,7 @@ mod tests;
 pub(crate) struct SmtpServer {
     tcp_listener: TcpListener,
     session_builder: SessionBuilder,
-    tls_config: Option<Arc<ServerConfig>>,
+    tls_config: Option<TlsAcceptor>,
 }
 
 impl SmtpServer {
@@ -27,7 +26,7 @@ impl SmtpServer {
         Ok(SmtpServer {
             tcp_listener: TcpListener::bind(conf.local_addr).await?,
             session_builder: SessionBuilder::new("TCP mail saver"),
-            tls_config: conf.tls_config.clone(),
+            tls_config: conf.tls_config.clone().map(TlsAcceptor::from),
         })
     }
 
@@ -42,31 +41,25 @@ impl SmtpServer {
     async fn recv_mail_plain(&self) -> Result<SmtpEmail, Error> {
         let (stream, peer_addr) = self.tcp_listener.accept().await?;
         info!("Accepted incoming TCP connection.");
-
-        // TODO: Make the complete function use async IO
-        let stream = stream.into_std()?;
-        stream.set_nonblocking(false)?;
-
-        let mut conn_buf_read = BufReader::new(&stream);
-        let mut conn_buf_write = BufWriter::new(&stream);
+        let mut stream = BufStream::new(stream);
 
         let (sender, receiver) = channel();
         let mut session = self
             .session_builder
             .build(peer_addr.ip(), MailHandler::new(sender));
 
-        session.greeting().write_to(&mut conn_buf_write)?;
-        conn_buf_write.flush()?;
-        let mut buf = String::new();
+        write_resp_async(session.greeting(), &mut stream).await?;
+        stream.flush().await?;
         let mut ongoing_communication = true;
         while ongoing_communication {
-            buf.clear();
-            conn_buf_read.read_line(&mut buf)?;
-            let resp = session.process(buf.as_bytes());
+            let mut line = String::new();
+            stream.read_line(&mut line).await?;
+            let resp = session.process(line.as_bytes());
             ongoing_communication = resp.action != response::Action::Close;
-            resp.write_to(&mut conn_buf_write)?;
-            conn_buf_write.flush()?;
+            write_resp_async(resp, &mut stream).await?;
+            stream.flush().await?;
         }
+        stream.shutdown().await?;
 
         Ok(receiver.recv().expect("Receive email channel hung up."))
     }
@@ -75,75 +68,30 @@ impl SmtpServer {
         let (tcp_stream, peer_addr) = self.tcp_listener.accept().await?;
         info!("Accepted incoming TCP connection.");
 
-        // TODO: Make the complete function use async IO
-        let mut tcp_stream = tcp_stream.into_std()?;
-        tcp_stream.set_nonblocking(false)?;
-
-        let mut tls_conn = ServerConnection::new(
-            self.tls_config
-                .as_ref()
-                .expect("recv_mail_tls() was called, but there is no tls_config.")
-                .clone(),
-        )?;
+        let tls_stream = self
+            .tls_config
+            .as_ref()
+            .expect("recv_mail_tls() was called, but there is no tls_config.")
+            .accept(tcp_stream)
+            .await?;
+        let mut stream = BufStream::new(tls_stream);
 
         let (sender, receiver) = channel();
         let mut session = self
             .session_builder
             .build(peer_addr.ip(), MailHandler::new(sender));
 
-        let mut last_resp = session.greeting();
-        last_resp.write_to(&mut tls_conn.writer())?;
-
-        let mut in_buf = Vec::new();
-        while last_resp.action != response::Action::Close {
-            tls_conn.complete_io(&mut tcp_stream)?;
-            match tls_conn.process_new_packets() {
-                Ok(state) => {
-                    // Process newly received data:
-                    if state.plaintext_bytes_to_read() > 0 {
-                        tls_conn.reader().read_to_end(&mut in_buf)?;
-                        // Process each line and save last unfinished line:
-                        let mut offset = 0;
-                        while offset < in_buf.len() {
-                            let mut end = offset;
-                            // Find next \r\n (0xa, 0xd)
-                            while end < in_buf.len()
-                                && (in_buf[end - 1] != 0xd || in_buf[end] != 0xa)
-                            {
-                                end += 1;
-                            }
-                            if in_buf[end - 1] == 0xd && in_buf[end] == 0xa {
-                                end += 1;
-                                // Process line:
-                                last_resp = session.process(&in_buf[offset..end]);
-                                let mut out_buf = Vec::new();
-                                last_resp.write_to(&mut out_buf)?;
-                                tls_conn.writer().write_all(out_buf.as_slice())?;
-                            }
-                            offset = end;
-                        }
-                        // Remove the processed lines from the buffer:
-                        in_buf.drain(0..offset);
-                    }
-                    // Check, if the peer closed the connection:
-                    if state.peer_has_closed() {
-                        break;
-                    }
-                }
-
-                Err(e) => {
-                    if tls_conn.wants_write() {
-                        tls_conn.write_tls(&mut tcp_stream)?;
-                    }
-                    return Err(e.into());
-                }
-            }
+        write_resp_async(session.greeting(), &mut stream).await?;
+        let mut ongoing_communication = true;
+        while ongoing_communication {
+            let mut line = String::new();
+            stream.read_line(&mut line).await?;
+            let resp = session.process(line.as_bytes());
+            ongoing_communication = resp.action != response::Action::Close;
+            write_resp_async(resp, &mut stream).await?;
+            stream.flush().await?;
         }
-        // Close connection and send remaining buffer:
-        tls_conn.send_close_notify();
-        while tls_conn.wants_write() {
-            tls_conn.write_tls(&mut tcp_stream)?;
-        }
+        stream.shutdown().await?;
 
         Ok(receiver.recv().expect("Receive email channel hung up."))
     }
@@ -195,7 +143,7 @@ impl Handler for MailHandler {
         response::OK
     }
 
-    fn data(&mut self, buf: &[u8]) -> io::Result<()> {
+    fn data(&mut self, buf: &[u8]) -> std::io::Result<()> {
         self.msg_buf
             .as_mut()
             .expect("Received data but no data command.")
@@ -228,4 +176,18 @@ impl Handler for MailHandler {
     ) -> Response {
         response::INVALID_CREDENTIALS
     }
+}
+
+async fn write_resp_async(
+    resp: mailin::response::Response,
+    mut writer: impl AsyncWriteExt + Unpin,
+) -> Result<(), Error> {
+    // Store response in buffer:
+    let mut buf = Vec::new();
+    resp.write_to(&mut buf)?;
+
+    // Write buffer asynchroniously:
+    writer.write_all(buf.as_slice()).await?;
+
+    Ok(())
 }
