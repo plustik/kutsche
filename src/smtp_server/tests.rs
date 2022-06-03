@@ -3,12 +3,13 @@ use lettre::{
     SendableEmail, Transport,
 };
 use lettre_email::EmailBuilder;
+use tokio::runtime::Runtime;
 
-use std::thread;
+use std::{thread, net::ToSocketAddrs};
 use std::time::Duration;
 
 use super::*;
-use crate::email::SmtpEmail;
+use crate::{config::Config, email::SmtpEmail};
 
 const SMPT_TEST_PORT: u16 = 4025;
 
@@ -58,12 +59,18 @@ fn send_mail_local(email: SendableEmail) -> thread::JoinHandle<()> {
 
 fn receive_mails(n: usize) -> thread::JoinHandle<Vec<SmtpEmail>> {
     thread::spawn(move || {
+        let runtime = Runtime::new().expect("Could not start Tokio runtime.");
+        println!("Started Tokio runtime.");
+
         let mut res = vec![];
+        let mut server_config = Config::default();
+        server_config.local_addr = ("localhost", SMPT_TEST_PORT).to_socket_addrs().unwrap().next().unwrap();
+        println!("Binding to address: {}", &server_config.local_addr);
         let smtp_server =
-            SmtpServer::new(("localhost", SMPT_TEST_PORT)).expect("Could not start SMTP server.");
+            runtime.block_on(SmtpServer::new(&server_config)).expect("Could not start SMTP server.");
         println!("Started SMTP server.");
         for i in 0..n {
-            res.push(smtp_server.recv_mail().expect("Could not receive email."));
+            res.push(runtime.block_on(smtp_server.recv_mail()).expect("Could not receive email."));
             println!("Received mail {}", i);
         }
 

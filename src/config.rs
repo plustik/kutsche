@@ -167,3 +167,17 @@ impl Config {
         Ok(self)
     }
 }
+
+#[cfg(test)]
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            effective_user: None,
+            effective_group: None,
+            local_addr: "127.0.0.1:25".to_socket_addrs().unwrap().next().unwrap(),
+            default_path: None,
+            dest_map: HashMap::new(),
+            tls_config: None,
+        }
+    }
+}
