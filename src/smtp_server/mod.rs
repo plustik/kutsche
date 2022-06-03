@@ -7,7 +7,7 @@ use tokio::{
 };
 use tokio_rustls::TlsAcceptor;
 
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::mpsc::{channel, Sender};
 
 use crate::{config::Config, email::SmtpEmail, Error};
@@ -31,18 +31,26 @@ impl SmtpServer {
     }
 
     pub(crate) async fn recv_mail(&self) -> Result<SmtpEmail, Error> {
-        if self.tls_config.is_some() {
-            self.recv_mail_tls().await
+        let (tcp_stream, peer_addr) = self.tcp_listener.accept().await?;
+        info!("Accepted incoming TCP connection.");
+
+        if let Some(acceptor) = &self.tls_config {
+            self.handle_mail_comm(
+                peer_addr,
+                BufStream::new(acceptor.accept(tcp_stream).await?),
+            )
+            .await
         } else {
-            self.recv_mail_plain().await
+            self.handle_mail_comm(peer_addr, BufStream::new(tcp_stream))
+                .await
         }
     }
 
-    async fn recv_mail_plain(&self) -> Result<SmtpEmail, Error> {
-        let (stream, peer_addr) = self.tcp_listener.accept().await?;
-        info!("Accepted incoming TCP connection.");
-        let mut stream = BufStream::new(stream);
-
+    async fn handle_mail_comm(
+        &self,
+        peer_addr: SocketAddr,
+        mut stream: impl AsyncBufReadExt + AsyncWriteExt + Unpin,
+    ) -> Result<SmtpEmail, Error> {
         let (sender, receiver) = channel();
         let mut session = self
             .session_builder
@@ -50,38 +58,6 @@ impl SmtpServer {
 
         write_resp_async(session.greeting(), &mut stream).await?;
         stream.flush().await?;
-        let mut ongoing_communication = true;
-        while ongoing_communication {
-            let mut line = String::new();
-            stream.read_line(&mut line).await?;
-            let resp = session.process(line.as_bytes());
-            ongoing_communication = resp.action != response::Action::Close;
-            write_resp_async(resp, &mut stream).await?;
-            stream.flush().await?;
-        }
-        stream.shutdown().await?;
-
-        Ok(receiver.recv().expect("Receive email channel hung up."))
-    }
-
-    async fn recv_mail_tls(&self) -> Result<SmtpEmail, Error> {
-        let (tcp_stream, peer_addr) = self.tcp_listener.accept().await?;
-        info!("Accepted incoming TCP connection.");
-
-        let tls_stream = self
-            .tls_config
-            .as_ref()
-            .expect("recv_mail_tls() was called, but there is no tls_config.")
-            .accept(tcp_stream)
-            .await?;
-        let mut stream = BufStream::new(tls_stream);
-
-        let (sender, receiver) = channel();
-        let mut session = self
-            .session_builder
-            .build(peer_addr.ip(), MailHandler::new(sender));
-
-        write_resp_async(session.greeting(), &mut stream).await?;
         let mut ongoing_communication = true;
         while ongoing_communication {
             let mut line = String::new();
