@@ -9,7 +9,7 @@ use std::time::Duration;
 use std::{net::ToSocketAddrs, thread};
 
 use super::*;
-use crate::{config::Config, email::SmtpEmail};
+use crate::email::SmtpEmail;
 
 const SMPT_TEST_PORT: u16 = 4025;
 
@@ -63,15 +63,14 @@ fn receive_mails(n: usize) -> thread::JoinHandle<Vec<SmtpEmail>> {
         println!("Started Tokio runtime.");
 
         let mut res = vec![];
-        let mut server_config = Config::default();
-        server_config.local_addr = ("localhost", SMPT_TEST_PORT)
+        let local_addr = ("localhost", SMPT_TEST_PORT)
             .to_socket_addrs()
             .unwrap()
             .next()
             .unwrap();
-        println!("Binding to address: {}", &server_config.local_addr);
+        println!("Binding to address: {}", local_addr);
         let smtp_server = runtime
-            .block_on(SmtpServer::new(&server_config))
+            .block_on(SmtpServer::new(&local_addr, None))
             .expect("Could not start SMTP server.");
         println!("Started SMTP server.");
         for i in 0..n {

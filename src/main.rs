@@ -1,11 +1,11 @@
-use std::{env::args, io};
-
 use log::{info, LevelFilter};
 use log4rs::{
     append::console::ConsoleAppender,
     config::{Appender, Config, Root},
 };
 use users::switch::{set_effective_gid, set_effective_uid};
+
+use std::{env::args, io, sync::Arc};
 
 use smtp_server::SmtpServer;
 
@@ -23,33 +23,47 @@ async fn main() {
 
     init_logger(&config).expect("Could not initialize logger.");
 
-    let smtp_server = SmtpServer::new(&config)
-        .await
-        .expect("Could not bind to TcpSocket.");
+    // TODO: Refactor to filter_map when async closures become stable (issue 62290)
+    let mut smtp_servers = Vec::new();
+    for addr in config.local_addrs.iter() {
+        match SmtpServer::new(addr, config.tls_config.clone()).await {
+            Ok(server) => {
+                log::info!("Startet server bound to {}", addr);
+                smtp_servers.push(server);
+            }
+            Err(_e) => {
+                // TODO: log error e
+                log::warn!("Faild to start server for local address {}", addr);
+            }
+        }
+    }
 
     // Dropping privileges:
-    if let Some(user) = config.effective_user {
+    if let Some(user) = &config.effective_user {
         info!("Changing effective user ID to {}...", user.uid());
         set_effective_uid(user.uid()).expect("Could not change effective user.");
     }
-    if let Some(group) = config.effective_group {
+    if let Some(group) = &config.effective_group {
         info!("Changing effective group ID to {}...", group.gid());
         set_effective_gid(group.gid()).expect("Could not change effective group.");
     }
     info!("Dropped privileges.");
 
     info!("Accepting connections...");
-    loop {
-        let email = smtp_server
-            .recv_mail()
-            .await
-            .expect("Could not receive email.");
-        for addr in email.to {
-            if let Some(dest) = config.dest_map.get(AsRef::<str>::as_ref(&addr)) {
-                dest.write_email(&email.content)
-                    .expect("Could not forward email.");
+    let config = Arc::new(config);
+    for server in smtp_servers {
+        let config_ref = config.clone();
+        tokio::spawn(async move {
+            loop {
+                let email = server.recv_mail().await.expect("Could not receive email.");
+                for addr in email.to {
+                    if let Some(dest) = config_ref.dest_map.get(AsRef::<str>::as_ref(&addr)) {
+                        dest.write_email(&email.content)
+                            .expect("Could not forward email.");
+                    }
+                }
             }
-        }
+        });
     }
 }
 

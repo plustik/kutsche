@@ -16,9 +16,9 @@ use crate::Error;
 pub(crate) struct Config {
     pub(crate) effective_user: Option<User>,
     pub(crate) effective_group: Option<Group>,
-    pub(crate) local_addr: SocketAddr, // TODO: multiple addresses
+    pub(crate) local_addrs: Vec<SocketAddr>,
     default_path: Option<PathBuf>,
-    pub(crate) dest_map: HashMap<String, Box<dyn EmailDestination>>,
+    pub(crate) dest_map: HashMap<String, Box<dyn EmailDestination + Send + Sync>>,
     pub(crate) tls_config: Option<Arc<ServerConfig>>,
 }
 
@@ -47,16 +47,13 @@ impl Config {
             .ok_or_else(|| Error::Config("Missing section 'KUTSCHE'.".to_string()))?;
 
         // Get local socket address or default:
-        let local_addr = main_section
+        let local_addrs: Vec<SocketAddr> = main_section
             .remove("bind_address")
             .flatten()
             .unwrap_or_else(|| "127.0.0.1:25".to_string())
             .to_socket_addrs()
             .map_err(|_| Error::Config("Could not resolve value of 'bind_address'.".to_string()))?
-            .next()
-            .ok_or_else(|| {
-                Error::Config("Could not resolve value of 'bind_address'.".to_string())
-            })?;
+            .collect();
 
         // Get new unix user and group:
         let effective_user = if let Some(name) = main_section.remove("unix_user").flatten() {
@@ -75,7 +72,7 @@ impl Config {
         };
 
         // Get TLS configuration:
-        let tls_config = if local_addr.port() == 465 {
+        let tls_config = if local_addrs.iter().any(|addr| addr.port() == 465) {
             // Read certificates:
             let cert_file = File::open(
                 main_section
@@ -132,7 +129,7 @@ impl Config {
         Config {
             effective_user,
             effective_group,
-            local_addr,
+            local_addrs,
             default_path,
             dest_map: HashMap::new(),
             tls_config,
@@ -174,7 +171,7 @@ impl Default for Config {
         Config {
             effective_user: None,
             effective_group: None,
-            local_addr: "127.0.0.1:25".to_socket_addrs().unwrap().next().unwrap(),
+            local_addrs: "127.0.0.1:25".to_socket_addrs().unwrap().collect(),
             default_path: None,
             dest_map: HashMap::new(),
             tls_config: None,

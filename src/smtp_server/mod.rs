@@ -1,16 +1,18 @@
 use lettre::EmailAddress;
-use log::info;
+use log::{error, info};
 use mailin::{response, Handler, Response, SessionBuilder};
+use rustls::ServerConfig;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufStream},
     net::TcpListener,
+    sync::oneshot::{channel, Sender},
 };
 use tokio_rustls::TlsAcceptor;
 
 use std::net::{IpAddr, SocketAddr};
-use std::sync::mpsc::{channel, Sender};
+use std::sync::Arc;
 
-use crate::{config::Config, email::SmtpEmail, Error};
+use crate::{email::SmtpEmail, Error};
 
 #[cfg(test)]
 mod tests;
@@ -22,11 +24,14 @@ pub(crate) struct SmtpServer {
 }
 
 impl SmtpServer {
-    pub(crate) async fn new(conf: &Config) -> Result<Self, Error> {
+    pub(crate) async fn new(
+        addr: &SocketAddr,
+        tls_config: Option<Arc<ServerConfig>>,
+    ) -> Result<Self, Error> {
         Ok(SmtpServer {
-            tcp_listener: TcpListener::bind(conf.local_addr).await?,
+            tcp_listener: TcpListener::bind(addr).await?,
             session_builder: SessionBuilder::new("TCP mail saver"),
-            tls_config: conf.tls_config.clone().map(TlsAcceptor::from),
+            tls_config: tls_config.map(TlsAcceptor::from),
         })
     }
 
@@ -56,7 +61,8 @@ impl SmtpServer {
             .session_builder
             .build(peer_addr.ip(), MailHandler::new(sender));
 
-        write_resp_async(session.greeting(), &mut stream).await?;
+        let greeting = session.greeting();
+        write_resp_async(greeting, &mut stream).await?;
         stream.flush().await?;
         let mut ongoing_communication = true;
         while ongoing_communication {
@@ -69,7 +75,7 @@ impl SmtpServer {
         }
         stream.shutdown().await?;
 
-        Ok(receiver.recv().expect("Receive email channel hung up."))
+        Ok(receiver.await.expect("Receive email channel hung up."))
     }
 }
 
@@ -77,7 +83,7 @@ struct MailHandler {
     from: Option<EmailAddress>,
     to: Vec<EmailAddress>,
     msg_buf: Option<Vec<u8>>,
-    result_sender: Sender<SmtpEmail>,
+    result_sender: Option<Sender<SmtpEmail>>,
 }
 
 impl MailHandler {
@@ -86,7 +92,7 @@ impl MailHandler {
             from: None,
             to: vec![],
             msg_buf: None,
-            result_sender: sender,
+            result_sender: Some(sender),
         }
     }
 }
@@ -137,9 +143,15 @@ impl Handler for MailHandler {
         )
         .expect("Could not parse received message.");
         info!("Received an email over SMTP.");
-        self.result_sender
-            .send(complete_mail)
-            .expect("Could not send received mail through channel.");
+        if let Some(sender) = self.result_sender.take() {
+            sender
+                .send(complete_mail)
+                .expect("Could not send received mail through channel.");
+        } else {
+            error!("Reveiced DATA_END twice.");
+            // TODO: Better error handling
+            panic!("MailHandler::data_end() was called twice.");
+        }
 
         response::OK
     }
