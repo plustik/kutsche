@@ -26,10 +26,12 @@ impl SmtpEmail {
             if let Some(id) = p.get_message_id() {
                 id.to_string()
             } else {
-                return Err(Error::Parsing("Missing message-id header."));
+                return Err(Error::MailParsing("Missing message-id header."));
             }
         } else {
-            return Err(Error::Parsing("Could not parse RFC5322/RFC822 message."));
+            return Err(Error::MailParsing(
+                "Could not parse RFC5322/RFC822 message.",
+            ));
         };
 
         Ok(SmtpEmail {

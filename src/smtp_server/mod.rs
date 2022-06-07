@@ -5,7 +5,6 @@ use rustls::ServerConfig;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufStream},
     net::TcpListener,
-    sync::oneshot::{channel, Sender},
 };
 use tokio_rustls::TlsAcceptor;
 
@@ -56,10 +55,10 @@ impl SmtpServer {
         peer_addr: SocketAddr,
         mut stream: impl AsyncBufReadExt + AsyncWriteExt + Unpin,
     ) -> Result<SmtpEmail, Error> {
-        let (sender, receiver) = channel();
+        let mut mail_handler = MailHandler::new();
         let mut session = self
             .session_builder
-            .build(peer_addr.ip(), MailHandler::new(sender));
+            .build(peer_addr.ip(), &mut mail_handler);
 
         let greeting = session.greeting();
         write_resp_async(greeting, &mut stream).await?;
@@ -75,7 +74,7 @@ impl SmtpServer {
         }
         stream.shutdown().await?;
 
-        Ok(receiver.await.expect("Receive email channel hung up."))
+        mail_handler.received_mail
     }
 }
 
@@ -83,21 +82,21 @@ struct MailHandler {
     from: Option<EmailAddress>,
     to: Vec<EmailAddress>,
     msg_buf: Option<Vec<u8>>,
-    result_sender: Option<Sender<SmtpEmail>>,
+    received_mail: Result<SmtpEmail, Error>,
 }
 
 impl MailHandler {
-    fn new(sender: Sender<SmtpEmail>) -> Self {
+    fn new() -> Self {
         MailHandler {
             from: None,
             to: vec![],
             msg_buf: None,
-            result_sender: Some(sender),
+            received_mail: Err(Error::Smtp("No DATA_END reveived.".to_string())),
         }
     }
 }
 
-impl Handler for MailHandler {
+impl Handler for &mut MailHandler {
     fn helo(&mut self, _ip: IpAddr, _domain: &str) -> Response {
         response::OK
     }
@@ -146,7 +145,7 @@ impl Handler for MailHandler {
     fn data(&mut self, buf: &[u8]) -> std::io::Result<()> {
         self.msg_buf
             .as_mut()
-            .expect("Received data but no data command.")
+            .expect("Received data but no data command.") // We assume mailin makes sure this cannot happen.
             .extend_from_slice(buf);
         Ok(())
     }
@@ -157,21 +156,27 @@ impl Handler for MailHandler {
             self.to.drain(0..).collect(),
             self.msg_buf
                 .take()
-                .expect("Received DATA_END before DATA_START."),
-        )
-        .expect("Could not parse received message.");
-        info!("Received an email over SMTP.");
-        if let Some(sender) = self.result_sender.take() {
-            sender
-                .send(complete_mail)
-                .expect("Could not send received mail through channel.");
-        } else {
-            error!("Reveiced DATA_END twice.");
-            // TODO: Better error handling
-            panic!("MailHandler::data_end() was called twice.");
+                .expect("Received DATA_END before DATA_START."), // We assume mailin makes sure this cannot happen.
+        );
+        debug!("Received an email over SMTP.");
+        match &self.received_mail {
+            Err(Error::Smtp(_)) => {
+                self.received_mail = complete_mail;
+                response::OK
+            }
+            Ok(_) => {
+                error!("Reveiced DATA_END twice.");
+                self.received_mail = Err(Error::Smtp("Received multiple DATA_END.".to_string()));
+                response::Response::custom(503, "Received multiple DATA_END.".to_string())
+            }
+            Err(_) => {
+                error!("Reveiced DATA_END after previous error.");
+                response::Response::custom(
+                    554,
+                    "Received DATA_END after previous error.".to_string(),
+                )
+            }
         }
-
-        response::OK
     }
 
     fn auth_plain(

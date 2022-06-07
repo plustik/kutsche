@@ -40,11 +40,16 @@ impl Config {
 
         // Load config file:
         let mut file_cfg = Ini::new();
-        file_cfg.load(config_path)?;
+        file_cfg
+            .load(&config_path)
+            .map_err(|s| Error::Config(format!("Could not parse INI file: {}", s)))?;
 
-        let mut main_section = file_cfg
-            .remove_section("KUTSCHE")
-            .ok_or_else(|| Error::Config("Missing section 'KUTSCHE'.".to_string()))?;
+        let mut main_section = file_cfg.remove_section("KUTSCHE").ok_or_else(|| {
+            Error::Config(format!(
+                "Missing section 'KUTSCHE' in config file {}.",
+                &config_path
+            ))
+        })?;
 
         // Get local socket address or default:
         let local_addrs: Vec<SocketAddr> = main_section
@@ -52,7 +57,12 @@ impl Config {
             .flatten()
             .unwrap_or_else(|| "127.0.0.1:25".to_string())
             .to_socket_addrs()
-            .map_err(|_| Error::Config("Could not resolve value of 'bind_address'.".to_string()))?
+            .map_err(|_| {
+                Error::Config(
+                    "Could not resolve value of 'bind_address' in main section of config."
+                        .to_string(),
+                )
+            })?
             .collect();
 
         // Get new unix user and group:
@@ -74,12 +84,10 @@ impl Config {
         // Get TLS configuration:
         let tls_config = if local_addrs.iter().any(|addr| addr.port() == 465) {
             // Read certificates:
-            let cert_file = File::open(
-                main_section
-                    .remove("cert_file")
-                    .flatten()
-                    .ok_or_else(|| Error::Config("Missing key 'cert_file'.".to_string()))?,
-            )?;
+            let cert_file =
+                File::open(main_section.remove("cert_file").flatten().ok_or_else(|| {
+                    Error::Config("Missing key 'cert_file' in main section of config.".to_string())
+                })?)?;
             let mut reader = BufReader::new(cert_file);
             let certs = read_all(&mut reader)?
                 .into_iter()
@@ -93,21 +101,25 @@ impl Config {
                 .collect();
 
             // Read private key:
-            let key_file = File::open(
-                main_section
-                    .remove("private_key_file")
-                    .flatten()
-                    .ok_or_else(|| Error::Config("Missing key 'private_key_file'.".to_string()))?,
-            )?;
+            let key_file_path = main_section
+                .remove("private_key_file")
+                .flatten()
+                .ok_or_else(|| {
+                    Error::Config(
+                        "Missing key 'private_key_file' in main section of config.".to_string(),
+                    )
+                })?;
+            let key_file = File::open(&key_file_path)?;
             let mut reader = BufReader::new(key_file);
             let priv_key = if let Some(Item::RSAKey(raw) | Item::PKCS8Key(raw) | Item::ECKey(raw)) =
                 read_one(&mut reader)?
             {
                 PrivateKey(raw)
             } else {
-                return Err(Error::Config(
-                    "Could not read key from 'private_key_file'.".to_string(),
-                ));
+                return Err(Error::Config(format!(
+                    "Could not read key from {} given by 'private_key_file'.",
+                    key_file_path
+                )));
             };
 
             Some(Arc::new(

@@ -6,7 +6,7 @@ This project is a WIP and can/should not be used in production.
 
 ## Usage
 
-Compile the server with
+The minimal supported rust version is currently 1.61. Compile the server with
 
 	$ cargo build --release
 

@@ -1,5 +1,5 @@
 use std::fs::OpenOptions;
-use std::io::{BufWriter, Write};
+use std::io::{self, BufWriter, Write};
 use std::path::PathBuf;
 
 use log::info;
@@ -21,17 +21,19 @@ impl FileDestination {
         if base_path.is_dir() {
             Ok(Self { base_path })
         } else {
-            Err(Error::NotADir)
+            Err(Error::SysIo(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "{} is not a directory.",
+                    base_path.to_str().unwrap_or("The given path")
+                ),
+            )))
         }
     }
 }
 
 impl EmailDestination for FileDestination {
     fn write_email(&self, email: &Email) -> Result<(), Error> {
-        if !self.base_path.is_dir() {
-            return Err(Error::NotADir);
-        }
-
         let mut dest_path = self.base_path.clone();
         dest_path.push(&email.message_id);
         let mut file_options = OpenOptions::new();
