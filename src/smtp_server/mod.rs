@@ -1,5 +1,5 @@
 use lettre::EmailAddress;
-use log::{error, info};
+use log::{debug, error, info, warn};
 use mailin::{response, Handler, Response, SessionBuilder};
 use rustls::ServerConfig;
 use tokio::{
@@ -103,15 +103,29 @@ impl Handler for MailHandler {
     }
 
     fn mail(&mut self, _ip: IpAddr, _domain: &str, from: &str) -> Response {
-        self.from =
-            Some(EmailAddress::new(String::from(from)).expect("Invalid FROM email address."));
-        response::OK
+        match EmailAddress::new(String::from(from)) {
+            Ok(m) => {
+                self.from = Some(m);
+                response::OK
+            }
+            Err(e) => {
+                warn!("Incoming SMTP connection with invalid FROM mailbox: {}", e);
+                response::BAD_MAILBOX
+            }
+        }
     }
 
     fn rcpt(&mut self, to: &str) -> Response {
-        self.to
-            .push(EmailAddress::new(String::from(to)).expect("Invalid TO email address."));
-        response::OK
+        match EmailAddress::new(String::from(to)) {
+            Ok(m) => {
+                self.to.push(m);
+                response::OK
+            }
+            Err(e) => {
+                warn!("Incoming SMTP connection with invalid FROM mailbox: {}", e);
+                response::BAD_MAILBOX
+            }
+        }
     }
 
     fn data_start(
@@ -121,6 +135,10 @@ impl Handler for MailHandler {
         _is8bit: bool,
         _to: &[String],
     ) -> Response {
+        debug!(
+            "SMTP server eceived DATA_START: domain: {}, from: {}, 8bit: {}",
+            _domain, _from, _is8bit
+        );
         self.msg_buf = Some(vec![]);
         response::OK
     }
