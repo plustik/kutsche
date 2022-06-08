@@ -1,10 +1,10 @@
 use lettre::EmailAddress;
-use log::{debug, error, info, warn};
+use log::{debug, error, warn};
 use mailin::{response, Handler, Response, SessionBuilder};
 use rustls::ServerConfig;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufStream},
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
 };
 use tokio_rustls::TlsAcceptor;
 
@@ -34,10 +34,15 @@ impl SmtpServer {
         })
     }
 
-    pub(crate) async fn recv_mail(&self) -> Result<SmtpEmail, Error> {
-        let (tcp_stream, peer_addr) = self.tcp_listener.accept().await?;
-        info!("Accepted incoming TCP connection.");
+    pub(crate) async fn accept_conn(&self) -> Result<(TcpStream, SocketAddr), Error> {
+        Ok(self.tcp_listener.accept().await?)
+    }
 
+    pub(crate) async fn recv_mail(
+        &self,
+        tcp_stream: TcpStream,
+        peer_addr: SocketAddr,
+    ) -> Result<SmtpEmail, Error> {
         if let Some(acceptor) = &self.tls_config {
             self.handle_mail_comm(
                 peer_addr,

@@ -83,27 +83,43 @@ async fn main() -> ExitCode {
     let config = Arc::new(config);
     for server in smtp_servers {
         let config_ref = config.clone();
+        let server_ref = Arc::new(server);
         tokio::spawn(async move {
             loop {
-                match server.recv_mail().await {
-                    Ok(email) => {
-                        for addr in email.to {
-                            if let Some(dest) = config_ref.dest_map.get(AsRef::<str>::as_ref(&addr))
-                            {
-                                if let Err(e) = dest.write_email(&email.content) {
-                                    eprintln!("Error while forwarding email: {}", &e);
-                                    error!("Could not forward email: {}", e);
+                let (stream, addr) = match server_ref.accept_conn().await {
+                    Err(e) => {
+                        eprintln!("Error while accepting TCP connection: {}", &e);
+                        error!("Could not accept TCP connection: {}", e);
+                        continue;
+                    }
+                    Ok((stream, addr)) => {
+                        info!("Accepted incoming TCP connection.");
+                        (stream, addr)
+                    }
+                };
+                let config = config_ref.clone();
+                let server = server_ref.clone();
+                tokio::spawn(async move {
+                    match server.recv_mail(stream, addr).await {
+                        Ok(email) => {
+                            for addr in email.to {
+                                if let Some(dest) = config.dest_map.get(AsRef::<str>::as_ref(&addr))
+                                {
+                                    if let Err(e) = dest.write_email(&email.content) {
+                                        eprintln!("Error while forwarding email: {}", &e);
+                                        error!("Could not forward email: {}", e);
+                                    }
+                                } else {
+                                    warn!("Received an email without a destination mapping.");
                                 }
-                            } else {
-                                warn!("Received an email without a destination mapping.");
                             }
                         }
+                        Err(e) => {
+                            eprintln!("Error while receiving email: {}", &e);
+                            error!("Could not receive mail: {}", e);
+                        }
                     }
-                    Err(e) => {
-                        eprintln!("Error while receiving email: {}", &e);
-                        error!("Could not receive mail: {}", e);
-                    }
-                }
+                });
             }
         });
     }

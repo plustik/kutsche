@@ -74,9 +74,12 @@ fn receive_mails(n: usize) -> thread::JoinHandle<Vec<SmtpEmail>> {
             .expect("Could not start SMTP server.");
         println!("Started SMTP server.");
         for i in 0..n {
+            let (stream, addr) = runtime
+                .block_on(smtp_server.accept_conn())
+                .expect("Could not accept TCP connection.");
             res.push(
                 runtime
-                    .block_on(smtp_server.recv_mail())
+                    .block_on(smtp_server.recv_mail(stream, addr))
                     .expect("Could not receive email."),
             );
             println!("Received mail {}", i);
