@@ -1,0 +1,38 @@
+
+#
+# Some basic configuration in the root section.
+#
+
+# After binding to the given address the effective user id and effective group
+# id are changed to the ids of the following user/group.
+unix_user = "not-root"
+unix_group = "somegroup"
+# The addresses the server should bind to to receive emails.
+bind_addresses = [ "127.0.0.1:25" ]
+# The directory, where emails whose corresponding mapping section does not
+# contain a destination.
+default_path = "/var/mail/"
+
+#
+# If we bind to an address with port 465 we need a section, that maps the
+# expected domains, for which we want to receive emails, to a certificate file
+# and a key file.
+#
+[certificates]
+# For a given domain:
+# cert_file is the path to the file, that contains the certificate chain used by the server.
+# private_key_file is the path to the file, that contains the private key used by the server.
+"example.com" = { cert_file = "/etc/kutsche/certificates.pem", private_key_file = "/etc/kutsche/priv_key.pem" }
+
+#
+# The mappings sections define, where a received email for a given address is forwarded to.
+#
+
+[mappings]
+
+# The name of mapping sections is arbitrary.
+[mappings.example]
+# The address, that is compared to incoming emails.
+address = "user@example.com"
+# The directory, where emails are stored, if this mapping is applied.
+dest_path = "/home/user/mail"
