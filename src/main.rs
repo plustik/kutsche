@@ -5,7 +5,7 @@ use log4rs::{
 };
 use users::switch::{set_effective_gid, set_effective_uid};
 
-use std::{env::args, fmt, io, process::ExitCode, sync::Arc};
+use std::{collections::VecDeque, env::args, fmt, io, process::ExitCode, sync::Arc};
 
 use smtp_server::SmtpServer;
 
@@ -81,10 +81,14 @@ async fn main() -> ExitCode {
 
     info!("Accepting connections...");
     let config = Arc::new(config);
+    // TODO: As soon as tokio::task::JoinSet is stabilized: replace the task_lists
+    let mut server_task_list = vec![];
     for server in smtp_servers {
         let config_ref = config.clone();
         let server_ref = Arc::new(server);
-        tokio::spawn(async move {
+        server_task_list.push(tokio::spawn(async move {
+            // TODO: As soon as tokio::task::JoinSet is stabilized: replace the task_lists
+            let mut conn_task_list = VecDeque::new();
             loop {
                 let (stream, addr) = match server_ref.accept_conn().await {
                     Err(e) => {
@@ -99,7 +103,7 @@ async fn main() -> ExitCode {
                 };
                 let config = config_ref.clone();
                 let server = server_ref.clone();
-                tokio::spawn(async move {
+                conn_task_list.push_back(tokio::spawn(async move {
                     match server.recv_mail(stream, addr).await {
                         Ok(email) => {
                             for addr in email.to {
@@ -119,9 +123,33 @@ async fn main() -> ExitCode {
                             error!("Could not receive mail: {}", e);
                         }
                     }
-                });
+                }));
+
+                // Remove finished tasks from the conn_task_list list to prevent it from growing invinitely:
+                while conn_task_list.front().is_some()
+                    && conn_task_list.front().unwrap().is_finished()
+                {
+                    if conn_task_list.pop_front().unwrap().await.is_err() {
+                        eprintln!("Error while joining the connection tasks: Task panicked.");
+                        error!("One of the connection tasks panicked.");
+                    }
+                }
             }
-        });
+            #[allow(unreachable_code)]
+            // This code will be necessary, when we implement a gracefull shutdown and replace the loop with a while.
+            for handle in conn_task_list.into_iter() {
+                if handle.await.is_err() {
+                    eprintln!("Error while joining the connection tasks: Task panicked.");
+                    error!("One of the connection tasks panicked.");
+                }
+            }
+        }));
+    }
+    for handle in server_task_list.into_iter() {
+        if handle.await.is_err() {
+            eprintln!("Error while joining the server tasks: Task panicked.");
+            error!("One of the server tasks panicked.");
+        }
     }
 
     ExitCode::SUCCESS
