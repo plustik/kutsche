@@ -23,6 +23,9 @@ default_path = "/var/mail/"
 # cert_file is the path to the file, that contains the certificate chain used by the server.
 # private_key_file is the path to the file, that contains the private key used by the server.
 "example.com" = { cert_file = "/etc/kutsche/certificates.pem", private_key_file = "/etc/kutsche/priv_key.pem" }
+# If a TLS configuration is given for at least one domain the usage of implicit
+# TLS is asserted for connections on port 465 and STARTTLS is offered for all
+# other connections.
 
 #
 # The mappings sections define, where a received email for a given address is forwarded to.

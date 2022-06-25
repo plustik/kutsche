@@ -20,6 +20,7 @@ pub(crate) struct SmtpServer {
     tcp_listener: TcpListener,
     session_builder: SessionBuilder,
     tls_config: Option<TlsAcceptor>,
+    implicit_tls: bool,
 }
 
 impl SmtpServer {
@@ -27,10 +28,16 @@ impl SmtpServer {
         addr: &SocketAddr,
         tls_config: Option<Arc<ServerConfig>>,
     ) -> Result<Self, Error> {
+        let mut smtp_session_builder = SessionBuilder::new("TCP mail saver");
+        if tls_config.is_some() && addr.port() != 465 {
+            smtp_session_builder.enable_start_tls();
+        }
+        let implicit_tls = tls_config.is_some() && addr.port() == 465;
         Ok(SmtpServer {
             tcp_listener: TcpListener::bind(addr).await?,
-            session_builder: SessionBuilder::new("TCP mail saver"),
+            session_builder: smtp_session_builder,
             tls_config: tls_config.map(TlsAcceptor::from),
+            implicit_tls,
         })
     }
 
@@ -43,10 +50,16 @@ impl SmtpServer {
         tcp_stream: TcpStream,
         peer_addr: SocketAddr,
     ) -> Result<SmtpEmail, Error> {
-        if let Some(acceptor) = &self.tls_config {
+        if self.implicit_tls {
             self.handle_mail_comm(
                 peer_addr,
-                BufStream::new(acceptor.accept(tcp_stream).await?),
+                BufStream::new(
+                    self.tls_config
+                        .as_ref()
+                        .expect("implicit_tls was true, but there was no TLS config.")
+                        .accept(tcp_stream)
+                        .await?,
+                ),
             )
             .await
         } else {
@@ -66,18 +79,38 @@ impl SmtpServer {
             .build(peer_addr.ip(), &mut mail_handler);
 
         let greeting = session.greeting();
-        write_resp_async(greeting, &mut stream).await?;
+        write_resp_async(&greeting, &mut stream).await?;
         stream.flush().await?;
-        let mut ongoing_communication = true;
-        while ongoing_communication {
+        let mut last_response = greeting;
+        while last_response.action != response::Action::Close
+            && last_response.action != response::Action::UpgradeTls
+        {
             let mut line = String::new();
             stream.read_line(&mut line).await?;
-            let resp = session.process(line.as_bytes());
-            ongoing_communication = resp.action != response::Action::Close;
-            write_resp_async(resp, &mut stream).await?;
+            last_response = session.process(line.as_bytes());
+            write_resp_async(&last_response, &mut stream).await?;
             stream.flush().await?;
         }
-        stream.shutdown().await?;
+        // If the client requests TLS we upgrade the connection and go on as we would have with a TCP stream:
+        if last_response.action == response::Action::UpgradeTls {
+            let mut tls_stream = BufStream::new(
+                self.tls_config
+                    .as_ref()
+                    .expect("STARTTLS was active, but there was no TLS config.")
+                    .accept(stream)
+                    .await?,
+            );
+            while last_response.action != response::Action::Close {
+                let mut line = String::new();
+                tls_stream.read_line(&mut line).await?;
+                last_response = session.process(line.as_bytes());
+                write_resp_async(&last_response, &mut tls_stream).await?;
+                tls_stream.flush().await?;
+            }
+            tls_stream.shutdown().await?;
+        } else {
+            stream.shutdown().await?;
+        }
 
         mail_handler.received_mail
     }
@@ -195,7 +228,7 @@ impl Handler for &mut MailHandler {
 }
 
 async fn write_resp_async(
-    resp: mailin::response::Response,
+    resp: &mailin::response::Response,
     mut writer: impl AsyncWriteExt + Unpin,
 ) -> Result<(), Error> {
     // Store response in buffer:
