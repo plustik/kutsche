@@ -2,7 +2,7 @@ use lettre::{
     smtp::{ClientSecurity, SmtpClient, SmtpTransport},
     SendableEmail, Transport,
 };
-use lettre_email::EmailBuilder;
+use lettre_email::{self, EmailBuilder};
 use tokio::runtime::Runtime;
 
 use std::time::Duration;
@@ -25,7 +25,8 @@ fn test_mail_recv() {
         .unwrap();
 
     // Start SMTP server:
-    let receiver_thread = receive_mails(1);
+    let mail_list = vec![test_email.clone()];
+    let receiver_thread = receive_mails_cmp(mail_list);
     thread::sleep(Duration::from_millis(100));
 
     // Send emails in new thread:
@@ -33,10 +34,8 @@ fn test_mail_recv() {
 
     // Wait for sending thread and SMTP server to finish:
     sender_thread.join().expect("Sender thread paniced.");
-    let received_mails = receiver_thread.join().expect("Receiver thread paniced.");
-
-    // Compare received and send emails:
-    assert_eq!(SmtpEmail::from(test_email), received_mails[0]);
+    let remaining_mails = receiver_thread.join().expect("Receiver thread paniced.");
+    assert!(remaining_mails.is_empty());
 }
 
 fn send_mail_local(email: SendableEmail) -> thread::JoinHandle<()> {
@@ -57,12 +56,13 @@ fn send_mail_local(email: SendableEmail) -> thread::JoinHandle<()> {
     })
 }
 
-fn receive_mails(n: usize) -> thread::JoinHandle<Vec<SmtpEmail>> {
+fn receive_mails_cmp(
+    mut expected_mails: Vec<lettre_email::Email>,
+) -> thread::JoinHandle<Vec<lettre_email::Email>> {
     thread::spawn(move || {
         let runtime = Runtime::new().expect("Could not start Tokio runtime.");
         println!("Started Tokio runtime.");
 
-        let mut res = vec![];
         let local_addr = ("localhost", SMPT_TEST_PORT)
             .to_socket_addrs()
             .unwrap()
@@ -73,19 +73,38 @@ fn receive_mails(n: usize) -> thread::JoinHandle<Vec<SmtpEmail>> {
             .block_on(SmtpServer::new(&local_addr, None))
             .expect("Could not start SMTP server.");
         println!("Started SMTP server.");
-        for i in 0..n {
+        let mut buf = vec![];
+        for i in 0..expected_mails.len() {
+            buf.clear();
             let (stream, addr) = runtime
                 .block_on(smtp_server.accept_conn())
                 .expect("Could not accept TCP connection.");
-            res.push(
-                runtime
-                    .block_on(smtp_server.recv_mail(stream, addr))
-                    .expect("Could not receive email."),
-            );
+            let new_mail = runtime
+                .block_on(smtp_server.recv_mail(stream, addr, &mut buf))
+                .expect("Could not receive email.");
             println!("Received mail {}", i);
+            rm_from_expected(&mut expected_mails, new_mail);
         }
 
         println!("Received all mail.");
-        res
+        expected_mails
     })
+}
+
+fn rm_from_expected(expected_mails: &mut Vec<lettre_email::Email>, received_mail: SmtpEmail<'_>) {
+    let mut i = 0;
+    let mut found = false;
+    while i < expected_mails.len() {
+        // Transform SendableEmail to SmtpEmail:
+        let mut buf = vec![];
+        let tokio_mail = expected_mails[i].clone().into();
+        let smpt_email = SmtpEmail::from_tokio_mail(tokio_mail, &mut buf);
+        if smpt_email == received_mail {
+            expected_mails.remove(i);
+            found = true;
+            break;
+        }
+        i += 1;
+    }
+    assert!(found, "Received an unexpected email.");
 }

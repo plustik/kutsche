@@ -18,7 +18,9 @@ mod smtp_server;
 async fn main() -> ExitCode {
     let config = match config::Config::with_args(
         args().skip_while(|s| s.ends_with("kutsche") && !s.starts_with('-')),
-    ) {
+    )
+    .await
+    {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Error while loading configuration: {}", &e);
@@ -104,7 +106,8 @@ async fn main() -> ExitCode {
                 let config = config_ref.clone();
                 let server = server_ref.clone();
                 conn_task_list.push_back(tokio::spawn(async move {
-                    match server.recv_mail(stream, addr).await {
+                    let mut buf = Vec::new();
+                    match server.recv_mail(stream, addr, &mut buf).await {
                         Ok(email) => {
                             for addr in email.to {
                                 if let Some(dest) = config.dest_map.get(AsRef::<str>::as_ref(&addr))
@@ -171,6 +174,7 @@ fn init_logger(_conf: &config::Config) -> Result<(), Error> {
 pub(crate) enum Error {
     Config(String),
     MailParsing(&'static str),
+    Matrix(String),
     Smtp(String),
     SysIo(io::Error),
     Tls(rustls::Error),
@@ -183,6 +187,7 @@ impl fmt::Display for Error {
         match self {
             Config(desc) => write!(f, "Error in config: {}", desc),
             MailParsing(desc) => write!(f, "Could not parse email: {}", desc),
+            Matrix(desc) => write!(f, "Error in Matrix communication: {}", desc),
             Smtp(desc) => write!(f, "Error in SMTP communication: {}", desc),
             SysIo(inner) => write!(f, "IO error: {}", inner),
             Tls(inner) => write!(f, "TLS error: {}", inner),
@@ -225,5 +230,13 @@ impl From<log4rs::config::runtime::ConfigErrors> for Error {
 impl From<log::SetLoggerError> for Error {
     fn from(inner: log::SetLoggerError) -> Self {
         Self::Config(format!("Error while setting logger: {}", inner))
+    }
+}
+impl From<matrix_sdk::Error> for Error {
+    fn from(inner: matrix_sdk::Error) -> Self {
+        match inner {
+            matrix_sdk::Error::Io(e) => Error::SysIo(e),
+            other => Error::Matrix(format!("{}", other)),
+        }
     }
 }

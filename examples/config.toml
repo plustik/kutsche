@@ -39,3 +39,21 @@ default_path = "/var/mail/"
 address = "user@example.com"
 # The directory, where emails are stored, if this mapping is applied.
 dest_path = "/home/user/mail"
+
+[mappings.matrix_example]
+address = "user@example.com"
+# The URL of the homeserver.
+matrix_homeserver = "matrix.example.com"
+# The username, with which the server logs in.
+# This parameter is optional, if matrix_session_file is present.
+matrix_username = "example-name"
+# The password, with which the server logs in.
+# This parameter is optional, if matrix_session_file is present.
+matrix_password = "123abc"
+# The path of the session file, where the matrix session should be stored after
+# logging in. If this file does not yet exist, the new session will be stored
+# there. If this file exists, the username and password will be ignored and the
+# existing session from the given file will be used instead.
+# This parameter is optional, if matrix_username and matrix_password are
+# present.
+matrix_session_file = "/var/kutsche/session.json"

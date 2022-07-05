@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use rustls::{
@@ -13,7 +13,7 @@ use rustls::{
 use rustls_pemfile::{read_all, read_one, Item};
 use users::{get_group_by_name, get_user_by_name, Group, User};
 
-use crate::maildest::{EmailDestination, FileDestination};
+use crate::maildest::{EmailDestination, FileDestination, MatrixDestBuilder};
 use crate::Error;
 
 pub(crate) struct Config {
@@ -26,7 +26,7 @@ pub(crate) struct Config {
 }
 
 impl Config {
-    pub(crate) fn with_args(mut args: impl Iterator<Item = String>) -> Result<Self, Error> {
+    pub(crate) async fn with_args(mut args: impl Iterator<Item = String>) -> Result<Self, Error> {
         // Select path of config file from arguments or default:
         let config_path = if let Some(arg) = args.next() {
             if arg != "-c" && arg != "--config-file" {
@@ -164,10 +164,11 @@ impl Config {
                     )
                 })?,
         )
+        .await
     }
 
     /// Loads a destination mapping from the given mappings sections from the config file to the own field dest_map.
-    fn load_mapping(
+    async fn load_mapping(
         mut self,
         mapping_sections: &toml::map::Map<String, toml::Value>,
     ) -> Result<Self, Error> {
@@ -191,20 +192,60 @@ impl Config {
                     Error::Config(format!("Field 'address' for mapping '{mapping_name}' has wrong type (expected string)."))
                 })?;
 
-            let dest_value = if let Some(path) = map_section.get("dest_path") {
-                FileDestination::new(path.as_str().ok_or_else(|| Error::Config(format!("Field 'dest_path' for mapping '{mapping_name}' has wrong type (expected string).")))?)
+            if let Some(matrix_homeserver) = map_section.get("matrix_homeserver") {
+                // Create matrix destination:
+
+                let mut dest_builder = MatrixDestBuilder::new(
+                    matrix_homeserver.as_str()
+                        .ok_or_else(|| Error::Config(format!("Field 'matrix_homeserver' for mapping '{mapping_name}' has wrong type (expected string).")))?
+                ).await?;
+                // Set session file path, if given:
+                if let Some(session_file_path) = map_section.get("matrix_session_file") {
+                    dest_builder.set_session_path(
+                        Path::new(
+                            session_file_path.as_str()
+                                .ok_or_else(|| Error::Config(format!("Field 'matrix_session_file' for mapping '{mapping_name}' has wrong type (expected string).")))?
+                        )
+                    );
+                }
+                // Set login data, if given:
+                if let Some(username) = map_section.get("matrix_username") {
+                    let username = username.as_str()
+                        .ok_or_else(|| Error::Config(format!("Field 'matrix_username' for mapping '{mapping_name}' has wrong type (expected string).")))?;
+                    let password = map_section.get("matrix_password")
+                        .ok_or_else(|| Error::Config(format!("Expected a field 'matrix_password', because the field 'matrix_username' was present in mapping '{mapping_name}'.")))?
+						.as_str()
+                        .ok_or_else(|| Error::Config(format!("Field 'matrix_password' for mapping '{mapping_name}' has wrong type (expected string).")))?;
+                    dest_builder.set_login(username, password);
+                }
+                // Build and insert into dest_map:
+                self.dest_map.insert(
+                    String::from(addr_key),
+                    Box::new(dest_builder.build().await?),
+                );
+            } else if let Some(path) = map_section.get("dest_path") {
+                // Create file destination specific to this mapping:
+
+                let destination = FileDestination::new(
+                    path.as_str()
+                        .ok_or_else(|| Error::Config(format!("Field 'dest_path' for mapping '{mapping_name}' has wrong type (expected string).")))?
+                )?;
+                self.dest_map
+                    .insert(String::from(addr_key), Box::new(destination));
             } else if let Some(ref base_path) = self.default_path {
+                // Create default file destination:
+
                 let mut path = PathBuf::from(base_path);
                 path.push(&addr_key);
-                FileDestination::new(path)
+                self.dest_map.insert(
+                    String::from(addr_key),
+                    Box::new(FileDestination::new(path)?),
+                );
             } else {
-                Err(Error::Config(format!(
+                return Err(Error::Config(format!(
                     "Missing destination for mapping '{mapping_name}'."
-                )))
-            }?;
-
-            self.dest_map
-                .insert(String::from(addr_key), Box::new(dest_value));
+                )));
+            };
         }
 
         Ok(self)

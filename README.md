@@ -14,4 +14,4 @@ Run the server with
 
 	./target/release/kutsche --config-file <path/to/config>
 
-You can find an exemplary config file in the example directory.
+You can find an exemplary config file with explanations for all configuration parameters in the example directory.

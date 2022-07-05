@@ -23,7 +23,7 @@ pub(crate) struct SmtpServer {
     implicit_tls: bool,
 }
 
-impl SmtpServer {
+impl<'a> SmtpServer {
     pub(crate) async fn new(
         addr: &SocketAddr,
         tls_config: Option<Arc<ServerConfig>>,
@@ -49,7 +49,8 @@ impl SmtpServer {
         &self,
         tcp_stream: TcpStream,
         peer_addr: SocketAddr,
-    ) -> Result<SmtpEmail, Error> {
+        buf: &'a mut Vec<u8>,
+    ) -> Result<SmtpEmail<'a>, Error> {
         if self.implicit_tls {
             self.handle_mail_comm(
                 peer_addr,
@@ -60,10 +61,11 @@ impl SmtpServer {
                         .accept(tcp_stream)
                         .await?,
                 ),
+                buf,
             )
             .await
         } else {
-            self.handle_mail_comm(peer_addr, BufStream::new(tcp_stream))
+            self.handle_mail_comm(peer_addr, BufStream::new(tcp_stream), buf)
                 .await
         }
     }
@@ -72,11 +74,11 @@ impl SmtpServer {
         &self,
         peer_addr: SocketAddr,
         mut stream: impl AsyncBufReadExt + AsyncWriteExt + Unpin,
-    ) -> Result<SmtpEmail, Error> {
-        let mut mail_handler = MailHandler::new();
-        let mut session = self
-            .session_builder
-            .build(peer_addr.ip(), &mut mail_handler);
+        buf: &'a mut Vec<u8>,
+    ) -> Result<SmtpEmail<'a>, Error> {
+        let mut res = Err(Error::Smtp("No DATA_END reveived.".to_string()));
+        let mail_handler = MailHandler::new(buf, &mut res);
+        let mut session = self.session_builder.build(peer_addr.ip(), mail_handler);
 
         let greeting = session.greeting();
         write_resp_async(&greeting, &mut stream).await?;
@@ -112,29 +114,32 @@ impl SmtpServer {
             stream.shutdown().await?;
         }
 
-        mail_handler.received_mail
+        res
     }
 }
 
-struct MailHandler {
+struct MailHandler<'a, 'b> {
     from: Option<EmailAddress>,
     to: Vec<EmailAddress>,
-    msg_buf: Option<Vec<u8>>,
-    received_mail: Result<SmtpEmail, Error>,
+    msg_buf: Option<&'a mut Vec<u8>>,
+    received_mail: &'b mut Result<SmtpEmail<'a>, Error>,
 }
 
-impl MailHandler {
-    fn new() -> Self {
+impl<'a, 'b> MailHandler<'a, 'b> {
+    fn new(
+        buf: &'a mut Vec<u8>,
+        result_pointer: &'b mut Result<SmtpEmail<'a>, Error>,
+    ) -> MailHandler<'a, 'b> {
         MailHandler {
             from: None,
             to: vec![],
-            msg_buf: None,
-            received_mail: Err(Error::Smtp("No DATA_END reveived.".to_string())),
+            msg_buf: Some(buf),
+            received_mail: result_pointer,
         }
     }
 }
 
-impl Handler for &mut MailHandler {
+impl<'a, 'b> Handler for MailHandler<'a, 'b> {
     fn helo(&mut self, _ip: IpAddr, _domain: &str) -> Response {
         response::OK
     }
@@ -176,35 +181,49 @@ impl Handler for &mut MailHandler {
             "SMTP server eceived DATA_START: domain: {}, from: {}, 8bit: {}",
             _domain, _from, _is8bit
         );
-        self.msg_buf = Some(vec![]);
+        if self.msg_buf.is_none() {
+            warn!("Received DATA_START after the message buf was taken.");
+            return response::Response::custom(503, "Bad sequence of commands".to_string());
+        } else if !self
+            .msg_buf
+            .as_ref()
+            .expect("We checked this with the previous case.")
+            .is_empty()
+        {
+            warn!("Received DATA_START while the message buf wasn't empty.");
+            self.msg_buf
+                .as_mut()
+                .expect("We checked this with the previous case.")
+                .clear();
+        }
         response::OK
     }
 
     fn data(&mut self, buf: &[u8]) -> std::io::Result<()> {
-        self.msg_buf
-            .as_mut()
-            .expect("Received data but no data command.") // We assume mailin makes sure this cannot happen.
-            .extend_from_slice(buf);
+        if let Some(ref mut buf_ref) = self.msg_buf {
+            buf_ref.extend_from_slice(buf);
+        } else {
+            warn!("Received DATA_START after the message buf was taken.");
+        }
         Ok(())
     }
 
     fn data_end(&mut self) -> Response {
+        let buf_ref: &'a mut Vec<u8> = self.msg_buf.take().unwrap();
         let complete_mail = SmtpEmail::new(
             self.from.take(),
             self.to.drain(0..).collect(),
-            self.msg_buf
-                .take()
-                .expect("Received DATA_END before DATA_START."), // We assume mailin makes sure this cannot happen.
+            buf_ref.as_slice(),
         );
         debug!("Received an email over SMTP.");
         match &self.received_mail {
             Err(Error::Smtp(_)) => {
-                self.received_mail = complete_mail;
+                *self.received_mail = complete_mail;
                 response::OK
             }
             Ok(_) => {
                 error!("Reveiced DATA_END twice.");
-                self.received_mail = Err(Error::Smtp("Received multiple DATA_END.".to_string()));
+                *self.received_mail = Err(Error::Smtp("Received multiple DATA_END.".to_string()));
                 response::Response::custom(503, "Received multiple DATA_END.".to_string())
             }
             Err(_) => {
