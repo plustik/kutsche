@@ -57,3 +57,5 @@ matrix_password = "123abc"
 # This parameter is optional, if matrix_username and matrix_password are
 # present.
 matrix_session_file = "/var/kutsche/session.json"
+# The Matrix room ID of the room, where arriving messages will be send to.
+matrix_room_id = "!example_opaque-id:example-domain.com"

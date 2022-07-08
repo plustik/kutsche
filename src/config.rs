@@ -5,6 +5,7 @@ use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use ruma::RoomId;
 use rustls::{
     server::{ClientHello, ResolvesServerCert, ServerConfig},
     sign::CertifiedKey,
@@ -218,6 +219,14 @@ impl Config {
                         .ok_or_else(|| Error::Config(format!("Field 'matrix_password' for mapping '{mapping_name}' has wrong type (expected string).")))?;
                     dest_builder.set_login(username, password);
                 }
+                // Set room ID:
+                let room_id = RoomId::parse(map_section.get("matrix_room_id")
+                    .ok_or_else(|| Error::Config(format!("Missing field 'matrix_room_id' for mapping '{mapping_name}'.")))?
+                    .as_str()
+                    .ok_or_else(|| Error::Config(format!("Field 'matrix_room_id' for mapping '{mapping_name}' has wrong type (expected string).")))?)
+                    .map_err(|e| Error::Config(format!("Could not parse Matrix room id for mapping '{mapping_name}': {}", e)))?;
+                dest_builder.set_room_id(room_id);
+
                 // Build and insert into dest_map:
                 self.dest_map.insert(
                     String::from(addr_key),

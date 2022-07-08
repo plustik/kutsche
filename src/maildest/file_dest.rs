@@ -1,8 +1,11 @@
-use std::fs::OpenOptions;
-use std::io::{self, BufWriter, Write};
 use std::path::PathBuf;
 
+use async_trait::async_trait;
 use log::info;
+use tokio::{
+    fs::OpenOptions,
+    io::{AsyncWriteExt, BufWriter},
+};
 
 use super::EmailDestination;
 use crate::email::Email;
@@ -18,8 +21,8 @@ impl FileDestination {
         if base_path.is_dir() {
             Ok(Self { base_path })
         } else {
-            Err(Error::SysIo(io::Error::new(
-                io::ErrorKind::NotFound,
+            Err(Error::SysIo(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
                 format!(
                     "{} is not a directory.",
                     base_path.to_str().unwrap_or("The given path")
@@ -29,23 +32,24 @@ impl FileDestination {
     }
 }
 
+#[async_trait]
 impl EmailDestination for FileDestination {
-    fn write_email(&self, email: &Email) -> Result<(), Error> {
+    async fn write_email(&self, email: &Email<'_>) -> Result<(), Error> {
         let mut dest_path = self.base_path.clone();
         dest_path.push(&email.message_id);
         let mut file_options = OpenOptions::new();
         file_options.write(true).create_new(true);
-        let file = file_options.open(dest_path)?;
+        let file = file_options.open(dest_path).await?;
 
         // Write email to file:
         let mut writer = BufWriter::new(file);
         // Write message ID:
-        writer.write_all(email.message_id.as_bytes())?;
-        writer.write_all("\n\n".as_bytes())?;
+        writer.write_all(email.message_id.as_bytes()).await?;
+        writer.write_all("\n\n".as_bytes()).await?;
         // Write content:
-        writer.write_all(email.raw)?;
+        writer.write_all(email.raw).await?;
 
-        writer.flush()?;
+        writer.flush().await?;
 
         info!("Wrote email with id {} to filesystem.", &email.message_id);
 

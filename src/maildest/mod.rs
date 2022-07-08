@@ -1,3 +1,5 @@
+use async_trait::async_trait;
+
 use crate::email::Email;
 use crate::Error;
 
@@ -7,6 +9,7 @@ mod matrix_dest;
 pub(crate) use file_dest::FileDestination;
 pub(crate) use matrix_dest::MatrixDestBuilder;
 
+#[async_trait]
 pub(crate) trait EmailDestination {
-    fn write_email(&self, email: &Email) -> Result<(), Error>;
+    async fn write_email(&self, email: &Email<'_>) -> Result<(), Error>;
 }

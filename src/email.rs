@@ -1,5 +1,7 @@
 use lettre::{self, EmailAddress};
-use mail_parser::Message;
+use mail_parser::{BodyPart, HeaderName, Message};
+
+use std::borrow::Cow;
 
 use crate::Error;
 
@@ -10,7 +12,7 @@ pub(crate) struct Email<'a> {
     parsed_message: Message<'a>,
 }
 
-impl<'a> Email<'a> {
+impl<'a, 'b> Email<'a> {
     fn parse(raw: &'a [u8]) -> Result<Email<'a>, Error> {
         if let Some(parsed_message) = Message::parse(raw) {
             if let Some(id) = parsed_message.get_message_id() {
@@ -27,6 +29,17 @@ impl<'a> Email<'a> {
                 "Could not parse RFC5322/RFC822 message.",
             ))
         }
+    }
+
+    pub fn headers(&'b self) -> impl Iterator<Item = (&'b HeaderName<'b>, Cow<'b, str>)> {
+        self.parsed_message.get_raw_headers()
+    }
+
+    pub fn text_body_parts(&'b self) -> impl Iterator<Item = &'b dyn BodyPart<'b>> {
+        self.parsed_message.get_text_bodies()
+    }
+    pub fn html_body_parts(&'b self) -> impl Iterator<Item = &'b dyn BodyPart<'b>> {
+        self.parsed_message.get_html_bodies()
     }
 }
 

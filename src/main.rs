@@ -112,7 +112,7 @@ async fn main() -> ExitCode {
                             for addr in email.to {
                                 if let Some(dest) = config.dest_map.get(AsRef::<str>::as_ref(&addr))
                                 {
-                                    if let Err(e) = dest.write_email(&email.content) {
+                                    if let Err(e) = dest.write_email(&email.content).await {
                                         eprintln!("Error while forwarding email: {}", &e);
                                         error!("Could not forward email: {}", e);
                                     }

@@ -1,5 +1,7 @@
+use async_trait::async_trait;
 use log::{error, info};
-use matrix_sdk::{Client, ClientBuildError};
+use matrix_sdk::{room::Room, Client, ClientBuildError};
+use ruma::{events::room::message::RoomMessageEventContent, OwnedRoomId};
 
 use std::fs::File;
 use std::io::{BufReader, BufWriter};
@@ -13,6 +15,7 @@ pub(crate) struct MatrixDestBuilder<'a> {
     matrix_client: Client,
     session_file_path: Option<&'a Path>,
     login_data: Option<(&'a str, &'a str)>, // username, password
+    room_id: Option<OwnedRoomId>,
 }
 impl<'a> MatrixDestBuilder<'a> {
     pub async fn new(homeserver_url: impl AsRef<str>) -> Result<MatrixDestBuilder<'a>, Error> {
@@ -57,6 +60,7 @@ impl<'a> MatrixDestBuilder<'a> {
             matrix_client,
             session_file_path: None,
             login_data: None,
+            room_id: None,
         })
     }
 
@@ -68,12 +72,17 @@ impl<'a> MatrixDestBuilder<'a> {
         self.session_file_path = Some(session_file_path);
     }
 
+    pub fn set_room_id(&mut self, room_id: OwnedRoomId) {
+        self.room_id = Some(room_id);
+    }
+
     /// Creates a new MatrixDestination by logging the internal Matrix client in or restoring an existing session.
     ///
     /// If an existing file was set with `set_session_path()` a session is restored from this file.
     /// Otherwise, if login data was set with `set_login()` a new session is created. If a non-existing session file was set with
     /// `set_session_path()` the new session is saved to the given path.
     /// If neither an existing session file nor login data is given, an error is returned.
+    /// Panics, if this is called before a room ID was set with 'set_room_id'.
     pub async fn build(self) -> Result<MatrixDestination, Error> {
         // We allow blocking calls in this function, because it should only be called during the startup of the server.
 
@@ -121,17 +130,63 @@ impl<'a> MatrixDestBuilder<'a> {
 
         Ok(MatrixDestination {
             matrix_client: self.matrix_client,
+            room_id: self.room_id.expect("MatrixDestBuilder::build() was called before calling MatrixDestBuilder::set_room_id()"),
         })
     }
 }
 
 pub(crate) struct MatrixDestination {
     matrix_client: Client,
+    room_id: OwnedRoomId,
 }
 
+#[async_trait]
 impl EmailDestination for MatrixDestination {
-    fn write_email(&self, email: &Email) -> Result<(), Error> {
-        info!("Wrote email with id {} to filesystem.", &email.message_id);
-        todo!();
+    async fn write_email(&self, email: &Email<'_>) -> Result<(), Error> {
+        let room = match self.matrix_client.get_room(&self.room_id) {
+            Some(Room::Joined(r)) => r,
+            Some(_) => {
+                return Err(Error::Matrix(format!(
+                    "Client is not a member of the given room with ID {}",
+                    self.room_id
+                )));
+            }
+            None => {
+                return Err(Error::Matrix(format!(
+                    "Could not get room with ID {}",
+                    self.room_id
+                )));
+            }
+        };
+
+        // Send headers:
+        let mut content = String::from("Received new message:");
+        for (header_name, header_value) in email.headers() {
+            content.push('\n');
+            content.push_str(header_name.as_str());
+            content.push_str(": ");
+            content.push_str(header_value.as_ref());
+        }
+        let event = RoomMessageEventContent::text_plain(content);
+        room.send(event, None).await?;
+        // Send text body:
+        for text in email
+            .text_body_parts()
+            .map(|part| String::from(part.get_text_contents()))
+        {
+            let event = RoomMessageEventContent::text_plain(text);
+            room.send(event, None).await?;
+        }
+        // Send HTML body:
+        for html in email
+            .html_body_parts()
+            .map(|part| String::from(part.get_text_contents()))
+        {
+            let event = RoomMessageEventContent::text_plain(html);
+            room.send(event, None).await?;
+        }
+        info!("Wrote email with id {} to Matrix room.", &email.message_id);
+
+        Ok(())
     }
 }
