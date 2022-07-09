@@ -1,6 +1,6 @@
 # Kutsche
 
-Kutsche is a simple SMTP server, that saves revieved emails locally or forwards them to another SMTP server.
+Kutsche is a simple SMTP server, that saves received emails locally or forwards them to a given Matrix room.
 
 This project is a WIP and can/should not be used in production.
 
